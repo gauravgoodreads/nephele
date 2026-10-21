@@ -71,28 +71,37 @@ wait_ready_replicas() { # wait_ready_replicas <deployment> <count> <timeout>
   return 1
 }
 
-# Simulated users: one real vote (POST) through the Ingress every 0.2 s.
+# Simulated users: one real vote (POST) every 0.2 s, sent by a probe pod
+# INSIDE the cluster straight to the Ingress controller (k8s/jobs/chaos-probe.yaml).
+# Measuring from inside avoids the laptop's port forwarding (Docker Desktop on
+# Windows), which drops connections under load before they reach the cluster.
+# Failed = any non-200 answer or none within 15 s; answers over 2 s = slow.
+PROBE_POD=""
 probe_start() {
-  PROBE_FILE="$(mktemp)"; rm -f "$PROBE_FILE.stop"
-  (
-    i=0
-    while [ ! -f "$PROBE_FILE.stop" ]; do
-      i=$((i + 1))
-      curl -4 -s -o /dev/null -m 3 -w '%{http_code}\n' -X POST -d "vote=a" \
-        -H "Cookie: voter_id=probe-$STAMP-$i" "$VOTE_URL/" >> "$PROBE_FILE"
-      sleep 0.2
-    done
-  ) &
-  PROBE_PID=$!
+  kubectl get ns chaos >/dev/null 2>&1 || kubectl create ns chaos >/dev/null
+  kubectl label ns chaos pod-security.kubernetes.io/enforce=restricted --overwrite >/dev/null
+  PROBE_POD="probe-$(date +%s)"
+  sed -e "s/PROBE_NAME/$PROBE_POD/" -e "s/PROBE_RUN/$STAMP/" k8s/jobs/chaos-probe.yaml | kubectl apply -f - >/dev/null
+  kubectl -n chaos wait --for=condition=ready "pod/$PROBE_POD" --timeout=120s >/dev/null
 }
-probe_stop() { # prints "<failed> of <total>"
-  touch "$PROBE_FILE.stop"; wait "$PROBE_PID" 2>/dev/null
-  local total failed
-  total=$(grep -c . "$PROBE_FILE" || true)
-  failed=$(grep -vc '^200$' "$PROBE_FILE" || true)
-  rm -f "$PROBE_FILE" "$PROBE_FILE.stop"
-  echo "$failed of $total"
+probe_stop() { # prints "<failed> of <total>, <slow> slower than 2 s"
+  local file total failed slow codes
+  file="$(mktemp)"
+  kubectl -n chaos logs "$PROBE_POD" > "$file" 2>/dev/null
+  kubectl -n chaos delete pod "$PROBE_POD" --grace-period=0 --force >/dev/null 2>&1
+  PROBE_POD=""
+  total=$(grep -c . "$file" || true)
+  failed=$(awk '$1 != "200"' "$file" | grep -c . || true)
+  slow=$(awk '$1 == "200" && $2 > 2' "$file" | grep -c . || true)
+  codes=$(awk '$1 != "200" {print $1}' "$file" | sort | uniq -c | awk '{printf "%s%s x%s", (NR>1?", ":""), $2, $1}')
+  rm -f "$file"
+  if [ "$failed" = "0" ]; then echo "0 of $total, $slow slower than 2 s"; else echo "$failed of $total ($codes), $slow slower than 2 s"; fi
 }
+cleanup() {
+  [ -n "$PROBE_POD" ] && kubectl -n chaos delete pod "$PROBE_POD" --grace-period=0 --force >/dev/null 2>&1
+  kc annotate scaledobject worker autoscaling.keda.sh/paused-replicas- >/dev/null 2>&1
+}
+trap cleanup EXIT
 
 pause_workers()  { kc annotate scaledobject worker autoscaling.keda.sh/paused-replicas=0 --overwrite >/dev/null; kc scale deploy worker --replicas=0 >/dev/null; sleep 3; }
 resume_workers() { kc annotate scaledobject worker autoscaling.keda.sh/paused-replicas- >/dev/null; kc scale deploy worker --replicas=1 >/dev/null; }
@@ -121,7 +130,7 @@ EOF
   echo
   echo "- Run: $(date '+%Y-%m-%d %H:%M:%S %Z')"
   echo "- Cluster: $(kubectl config current-context), $(kubectl get nodes --no-headers | wc -l | tr -d ' ') nodes, Kubernetes $(kubectl version -o json 2>/dev/null | grep -m1 gitVersion | tr -d ' ",' | cut -d: -f2)"
-  echo "- Simulated users: one real vote through the Ingress every 0.2 s during disruptive tests"
+  echo "- Simulated users: one real vote every 0.2 s from a probe pod inside the cluster to the Ingress controller; failed = any non-200 answer or none within 15 s"
   echo
   echo "| # | Test | What was done | Measured | Result |"
   echo "| --- | --- | --- | --- | --- |"

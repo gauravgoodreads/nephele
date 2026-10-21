@@ -10,6 +10,9 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 
 const BASE_URL = __ENV.BASE_URL || 'http://vote.localtest.me:8888';
+// Inside the cluster the script calls the Ingress controller directly and
+// names the site in the Host header (scripts/load-test.sh sets both).
+const PARAMS = __ENV.HOST_HEADER ? { headers: { Host: __ENV.HOST_HEADER } } : {};
 
 export const options = {
   stages: [
@@ -25,7 +28,7 @@ export const options = {
 
 export default function () {
   const option = Math.random() < 0.5 ? 'a' : 'b';
-  const res = http.post(`${BASE_URL}/`, { vote: option });
+  const res = http.post(`${BASE_URL}/`, { vote: option }, PARAMS);
   check(res, { 'vote accepted': (r) => r.status === 200 });
   sleep(0.5);
 }

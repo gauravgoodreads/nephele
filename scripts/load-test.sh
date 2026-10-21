@@ -1,25 +1,33 @@
 #!/usr/bin/env bash
-# Runs a k6 scenario and samples the cluster every 15 seconds: vote and worker
-# pods, votes waiting, votes in flight, votes saved. Writes
-# loadtest/results/<name>-summary.json, <name>-output.txt and <name>-scaling.csv.
+# Runs a k6 scenario as a Job inside the cluster (k8s/jobs/k6-load.yaml) and
+# samples the cluster every 15 s: vote and worker pods, votes waiting, in
+# flight and saved. Writes loadtest/results/<name>-output.txt,
+# <name>-summary.json and <name>-scaling.csv.
 #
-#   scripts/load-test.sh loadtest/k6-vote.js   v3-standard
-#   scripts/load-test.sh loadtest/k6-stress.js v3-stress
+#   scripts/load-test.sh k6-vote.js   v3-standard
+#   scripts/load-test.sh k6-stress.js v3-stress
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-SCRIPT="${1:?k6 script}"
+SCRIPT="${1:?k6 script name in loadtest/, e.g. k6-vote.js}"
 NAME="${2:?result name}"
 OUT=loadtest/results
-VOTE_URL="${VOTE_URL:-http://vote.localtest.me:8888}"
+JOB="k6-$(echo "$NAME" | tr -c 'a-z0-9\n' '-')-$(date +%s)"
 mkdir -p "$OUT"
-K6="$(command -v k6 || echo '/c/Program Files/k6/k6.exe')"
 
-metric() { curl -4 -s --max-time 3 "$VOTE_URL/metrics" | awk -v m="$1" '$1 == m { print $2 }'; }
+metric() { # reads a Nephele metric from a vote pod, inside the cluster
+  kubectl -n nephele exec deploy/vote -- python -c \
+    "import urllib.request as u; print(u.urlopen('http://127.0.0.1:8080/metrics', timeout=3).read().decode())" 2>/dev/null \
+    | awk -v m="$1" '$1 == m { print $2 }'
+}
 
-"$K6" run --summary-export "$OUT/$NAME-summary.json" "$SCRIPT" > "$OUT/$NAME-output.txt" 2>&1 &
-K6_PID=$!
+kubectl get ns chaos >/dev/null 2>&1 || kubectl create ns chaos >/dev/null
+kubectl label ns chaos pod-security.kubernetes.io/enforce=restricted --overwrite >/dev/null
+kubectl -n chaos create configmap k6-scripts --from-file=loadtest/k6-vote.js --from-file=loadtest/k6-stress.js \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+sed -e "s/JOB_NAME/$JOB/" -e "s/K6_SCRIPT/$SCRIPT/" k8s/jobs/k6-load.yaml | kubectl apply -f - >/dev/null
+kubectl -n chaos wait --for=condition=ready pod -l "job-name=$JOB" --timeout=180s >/dev/null
 
 echo "seconds,vote_pods,worker_pods,queue,in_flight,saved" > "$OUT/$NAME-scaling.csv"
 start=$(date +%s)
@@ -27,14 +35,21 @@ while :; do
   t=$(( $(date +%s) - start ))
   vote=$(kubectl -n nephele get deploy vote -o jsonpath='{.status.readyReplicas}')
   worker=$(kubectl -n nephele get deploy worker -o jsonpath='{.status.readyReplicas}')
-  echo "$t,${vote:-0},${worker:-0},$(metric nephele_queue_depth),$(metric nephele_votes_in_flight),$(metric nephele_votes_saved)" >> "$OUT/$NAME-scaling.csv"
-  if ! kill -0 "$K6_PID" 2>/dev/null; then
-    # keep sampling until the queue is empty, then stop
-    q=$(metric nephele_queue_depth); [ "${q%.*}" = "0" ] && break
-  fi
+  m=$(kubectl -n nephele exec deploy/vote -- python -c \
+    "import urllib.request as u; print(u.urlopen('http://127.0.0.1:8080/metrics', timeout=3).read().decode())" 2>/dev/null)
+  q=$(echo "$m" | awk '$1=="nephele_queue_depth"{print $2}')
+  f=$(echo "$m" | awk '$1=="nephele_votes_in_flight"{print $2}')
+  s=$(echo "$m" | awk '$1=="nephele_votes_saved"{print $2}')
+  echo "$t,${vote:-0},${worker:-0},$q,$f,$s" >> "$OUT/$NAME-scaling.csv"
+  done_=$(kubectl -n chaos get job "$JOB" -o jsonpath='{.status.succeeded}{.status.failed}')
+  if [ -n "$done_" ] && [ "${q%.*}" = "0" ]; then break; fi
   sleep 15
 done
-wait "$K6_PID"; rc=$?
-tail -n 30 "$OUT/$NAME-output.txt"
+
+kubectl -n chaos logs "job/$JOB" > "$OUT/$NAME-raw.log"
+sed '/===SUMMARY===/,$d' "$OUT/$NAME-raw.log" > "$OUT/$NAME-output.txt"
+sed '1,/===SUMMARY===/d' "$OUT/$NAME-raw.log" > "$OUT/$NAME-summary.json"
+rm -f "$OUT/$NAME-raw.log"
+grep -E 'http_req_duration|http_req_failed|http_reqs|vus_max|checks_succeeded' "$OUT/$NAME-output.txt" | head -8
 cat "$OUT/$NAME-scaling.csv"
-exit $rc
+[ "$(kubectl -n chaos get job "$JOB" -o jsonpath='{.status.succeeded}')" = "1" ]

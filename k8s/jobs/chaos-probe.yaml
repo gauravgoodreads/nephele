@@ -1,0 +1,45 @@
+# Simulated user for scripts/chaos-test.sh: one real vote every 0.2 s, sent
+# from inside the cluster straight to the Ingress controller, printing
+# "<http status> <seconds>" per request. Runs on the control-plane node so a
+# worker-node failure test cannot take the probe down with it.
+# PROBE_NAME and PROBE_RUN are filled in by the script.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: PROBE_NAME
+  namespace: chaos
+  labels: { app: chaos-probe }
+spec:
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 0
+  nodeSelector: { node-role.kubernetes.io/control-plane: "" }
+  tolerations:
+    - { key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule }
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    seccompProfile: { type: RuntimeDefault }
+  containers:
+    - name: probe
+      image: curlimages/curl:8.10.1
+      env:
+        - { name: RUN, value: "PROBE_RUN" }
+        - { name: TARGET, value: "http://ingress-nginx-controller.ingress-nginx.svc/" }
+      command: ["sh", "-c"]
+      # $$ is how a literal $ is written in Kubernetes command arguments.
+      args:
+        - |
+          i=0
+          while true; do
+            i=$$((i + 1))
+            curl -s -o /dev/null -m 15 -w '%{http_code} %{time_total}\n' -X POST -d vote=a \
+              -H 'Host: vote.localtest.me' -H "Cookie: voter_id=probe-$${RUN}-$${i}" "$${TARGET}"
+            sleep 0.2
+          done
+      resources:
+        requests: { cpu: 20m, memory: 16Mi }
+        limits: { cpu: 200m, memory: 64Mi }
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: { drop: ["ALL"] }

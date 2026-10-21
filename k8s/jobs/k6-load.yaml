@@ -1,0 +1,54 @@
+# Load test as a Kubernetes Job: k6 runs inside the cluster and calls the
+# Ingress controller directly, so the result measures the platform, not the
+# laptop's port forwarding. JOB_NAME and K6_SCRIPT are filled in by
+# scripts/load-test.sh; the scripts come from the ConfigMap k6-scripts.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: JOB_NAME
+  namespace: chaos
+  labels: { app: k6-load }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels: { app: k6-load }
+    spec:
+      restartPolicy: Never
+      nodeSelector: { node-role.kubernetes.io/control-plane: "" }
+      tolerations:
+        - { key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 12345
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: k6
+          image: grafana/k6:0.54.0
+          env:
+            - { name: BASE_URL, value: "http://ingress-nginx-controller.ingress-nginx.svc" }
+            - { name: HOST_HEADER, value: vote.localtest.me }
+          command: ["sh", "-c"]
+          args:
+            - |
+              k6 run --no-color --summary-export /tmp/summary.json /scripts/K6_SCRIPT
+              rc=$$?
+              echo "===SUMMARY==="
+              cat /tmp/summary.json
+              exit $$rc
+          resources:
+            requests: { cpu: 200m, memory: 128Mi }
+            limits: { cpu: "2", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: scripts
+          configMap: { name: k6-scripts }
+        - name: tmp
+          emptyDir: {}
