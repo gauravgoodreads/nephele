@@ -6,7 +6,8 @@ Nephele runs a small microservices application the way production systems
 run: on a 3-node Kubernetes cluster spread over two zones, scaling on load,
 healing itself, monitored with alert rules, locked down with strict security
 policy, and released by a pipeline that builds a real cluster and breaks it
-on purpose before anything ships. The same files describe the AWS deployment.
+on purpose before anything ships. The same files run it live on AWS (EKS, RDS,
+ElastiCache), built by Terraform.
 
 > **Credit.** The voting application (`vote`, `worker`, `result`) comes from
 > Docker's open-source [example-voting-app](https://github.com/dockersamples/example-voting-app)
@@ -95,6 +96,7 @@ Vote http://localhost:8080, results http://localhost:8081, Grafana http://localh
 | `scripts/chaos-test.sh` | 9 failure scenarios with a Markdown report in `tests/results/` |
 | `scripts/load-test.sh k6-vote.js <name>` | k6 load test run as a Job inside the cluster, with scaling samples |
 | `scripts/load-test.sh k6-stress.js <name>` | Stress test to 150 simultaneous voters |
+| `scripts/aws-up.sh` | Deploys to the EKS cluster from `infra/terraform` and smoke-tests it |
 | `docker build --target test -t t vote && docker run --rm t` | vote unit tests |
 | `docker build -t r result && docker run --rm r npm test` | result unit tests |
 
@@ -120,12 +122,15 @@ Reports and history: [tests/results/](tests/results/).
 
 ### Load tests (k6 as a Job inside the cluster)
 
-| | 60 users, 3 min | 150 users, 4.5 min |
-| --- | --- | --- |
-| Votes / failed | 8,182 / 0 | 17,629 / 32 (0.18%) |
-| Median / p95 | 64 ms / 496 ms | 499 ms / 3.08 s |
-| Vote pods / worker pods | 2-6 / 1-5 | 6 / 10 (both at maximum) |
-| Most votes waiting | 247 | 5,174 (drained; 2 alerts fired) |
+| | 60 users, 3 min | 150 users, 4.5 min | 60 users, 3 min, **AWS EKS** |
+| --- | --- | --- | --- |
+| Votes / failed | 8,182 / 0 | 17,629 / 32 (0.18%) | 11,721 / 0 |
+| Median / p95 | 64 ms / 496 ms | 499 ms / 3.08 s | 8.8 ms / 12.0 ms |
+| Vote pods / worker pods | 2-6 / 1-5 | 6 / 10 (both at maximum) | 2-6 / 1 |
+| Most votes waiting | 247 | 5,174 (drained; 2 alerts fired) | under 20 |
+
+The first two ran on kind (three nodes sharing one 4 GB VM); the AWS run used
+two `m7i-flex.large` nodes, with k6 on one of them.
 
 ### Performance history (same 3-minute, 60-user k6 test)
 
@@ -165,13 +170,28 @@ Other changes: settings from environment variables; `/healthz` and `/readyz`; vo
 
 ## AWS
 
-`infra/terraform` builds a VPC over two Availability Zones, EKS with a managed
-node group, RDS PostgreSQL, ElastiCache Redis and ECR. The `aws` overlay
-replaces the in-cluster data stores with ExternalName Services pointing at RDS
-and ElastiCache, so no application setting changes. Deploy with the
-`nephele-cd-aws` workflow (OIDC, no stored keys). Validated in CI; not applied,
-because the AWS account available for this project is governed by an
-organisation policy that denies EKS, EC2, RDS and ECR.
+**Running on AWS** since 21 Oct 2026, in Sydney (`ap-southeast-2`):
+http://vote.32.236.78.19.nip.io and http://result.32.236.78.19.nip.io
+
+`infra/terraform` builds a VPC over two Availability Zones, EKS (Kubernetes
+1.36) with a managed node group, RDS PostgreSQL, ElastiCache Redis and ECR. The
+`aws` overlay replaces the in-cluster data stores with ExternalName Services
+pointing at RDS and ElastiCache, so no application setting changes, and scales
+the worker with KEDA as on kind.
+
+```bash
+cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars   # optional overrides
+(cd infra/terraform && terraform init && terraform apply)
+scripts/aws-up.sh      # images to ECR, Ingress behind an NLB, KEDA, app, monitoring, smoke test
+scripts/aws-down.sh    # removes everything
+```
+
+The pages are published as `vote.<load balancer IP>.nip.io`, so no domain is
+needed. Grafana and Prometheus stay private (`kubectl port-forward`). The live
+deployment uses an AWS Free plan account, which limits instance types and
+backup retention; the values it needs are in `terraform.tfvars.example`. The
+`nephele-cd-aws` workflow deploys the same overlay from GitHub (OIDC, no
+stored keys).
 
 ## License
 
