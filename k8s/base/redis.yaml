@@ -33,11 +33,14 @@ spec:
           ports:
             - containerPort: 6379
               name: redis
+          # redis-cli exits 0 even on an error reply, so check for PONG: while
+          # Redis reloads its append-only file it answers "LOADING" and must
+          # not be marked ready yet.
           readinessProbe:
-            exec: { command: ["redis-cli", "ping"] }
-            periodSeconds: 5
+            exec: { command: ["sh", "-c", "redis-cli ping | grep -q PONG"] }
+            periodSeconds: 2
           livenessProbe:
-            exec: { command: ["redis-cli", "ping"] }
+            exec: { command: ["sh", "-c", "redis-cli ping | grep -qE 'PONG|LOADING'"] }
             initialDelaySeconds: 10
             periodSeconds: 15
           resources:

@@ -29,6 +29,12 @@ kubectl get nodes -L topology.kubernetes.io/zone
 
 step "Installing the NGINX Ingress controller ($INGRESS_NGINX_VERSION)"
 kubectl apply -f "https://raw.githubusercontent.com/kubernetes/ingress-nginx/$INGRESS_NGINX_VERSION/deploy/static/provider/kind/deploy.yaml"
+# Request metrics (count, status, latency per Service) are off by default in
+# this release; the monitoring stack and its alerts depend on them.
+if ! kubectl -n ingress-nginx get deployment ingress-nginx-controller -o jsonpath='{.spec.template.spec.containers[0].args}' | grep -q enable-metrics=true; then
+  kubectl -n ingress-nginx patch deployment ingress-nginx-controller --type=json \
+    -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--enable-metrics=true"}]'
+fi
 
 step "Installing metrics-server ($METRICS_SERVER_VERSION), needed by the CPU autoscaler"
 kubectl apply -f "https://github.com/kubernetes-sigs/metrics-server/releases/download/$METRICS_SERVER_VERSION/components.yaml"
