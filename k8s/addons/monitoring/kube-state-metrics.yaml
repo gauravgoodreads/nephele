@@ -1,0 +1,89 @@
+# kube-state-metrics turns Kubernetes objects (Deployments, pods, autoscalers,
+# jobs) into metrics: ready replicas, restarts, desired vs current pods.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-state-metrics
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nephele-kube-state-metrics
+rules:
+  - apiGroups: [""]
+    resources: [pods, nodes, namespaces, persistentvolumeclaims]
+    verbs: [list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, replicasets]
+    verbs: [list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [list, watch]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nephele-kube-state-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nephele-kube-state-metrics
+subjects:
+  - kind: ServiceAccount
+    name: kube-state-metrics
+    namespace: monitoring
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-state-metrics
+  labels: { app: kube-state-metrics }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: kube-state-metrics }
+  template:
+    metadata:
+      labels: { app: kube-state-metrics }
+    spec:
+      serviceAccountName: kube-state-metrics
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.14.0
+          args:
+            - --resources=pods,nodes,namespaces,persistentvolumeclaims,deployments,statefulsets,replicasets,horizontalpodautoscalers,jobs,cronjobs
+          ports:
+            - containerPort: 8080
+              name: http-metrics
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8081 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /livez, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-state-metrics
+  labels: { app: kube-state-metrics }
+spec:
+  selector: { app: kube-state-metrics }
+  ports:
+    - port: 8080
+      targetPort: http-metrics

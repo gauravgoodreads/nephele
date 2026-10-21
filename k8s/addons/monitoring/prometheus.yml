@@ -1,0 +1,83 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # Application metrics: any pod in "nephele" annotated prometheus.io/scrape=true
+  # (the vote pods). Every vote pod reads the same counters from Redis, so
+  # dashboards take max() across pods instead of sum().
+  - job_name: nephele-pods
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: { names: [nephele] }
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: (.+);(.+)
+        replacement: $1:$2
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: app
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_node_name]
+        target_label: node
+
+  # Traffic: requests, status codes and latency per Service, from the NGINX
+  # Ingress controller's own metrics endpoint (port 10254).
+  - job_name: ingress-nginx
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: { names: [ingress-nginx] }
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component, __meta_kubernetes_pod_container_port_name]
+        action: keep
+        regex: controller;http
+      - source_labels: [__meta_kubernetes_pod_ip]
+        replacement: $1:10254
+        target_label: __address__
+
+  # Kubernetes object state: replicas, restarts, autoscaler targets, jobs.
+  - job_name: kube-state-metrics
+    static_configs:
+      - targets: ["kube-state-metrics.monitoring.svc:8080"]
+
+  # Container CPU and memory, read from each node's kubelet through the API server.
+  - job_name: cadvisor
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    authorization:
+      credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+      - source_labels: [__meta_kubernetes_node_name]
+        target_label: node
+    metric_relabel_configs:
+      - source_labels: [namespace]
+        action: keep
+        regex: nephele|monitoring|keda|ingress-nginx
+      - source_labels: [__name__]
+        action: keep
+        regex: container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_network_.*_bytes_total
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -1,0 +1,26 @@
+# In-cluster observability for Nephele: Prometheus (metrics + alert rules),
+# kube-state-metrics (Kubernetes object state) and Grafana (dashboards).
+#   kubectl apply -k k8s/addons/monitoring
+#   Grafana:    http://grafana.localtest.me:8888
+#   Prometheus: http://prometheus.localtest.me:8888  (Alerts tab = alert rules)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: monitoring
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: nephele-monitoring
+resources:
+  - namespace.yaml
+  - prometheus.yaml
+  - kube-state-metrics.yaml
+  - grafana.yaml
+  - ingress.yaml
+configMapGenerator:
+  - name: prometheus-config
+    files:
+      - prometheus.yml
+      - alerts.yml
+  - name: grafana-dashboards
+    files:
+      - dashboards/nephele-application.json
+      - dashboards/nephele-platform.json
