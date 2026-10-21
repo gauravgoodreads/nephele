@@ -1,178 +1,151 @@
-# Nephele: a cloud-native voting platform on Docker, Kubernetes and AWS
+# Nephele: a fault-tolerant voting platform on Kubernetes
 
-Nephele takes a small microservices application and runs it the way real
-cloud systems run: in containers, orchestrated by Kubernetes, autoscaled,
-monitored, tested and shipped by a CI/CD pipeline, with infrastructure on
-AWS defined as code.
+[![nephele-ci](https://github.com/gauravgoodreads/nephele/actions/workflows/nephele-ci.yml/badge.svg)](https://github.com/gauravgoodreads/nephele/actions/workflows/nephele-ci.yml)
 
-> **Credit.** The voting application itself (the `vote`, `worker` and `result`
-> services) comes from Docker's open-source
-> [example-voting-app](https://github.com/dockersamples/example-voting-app),
-> Apache License 2.0. The original README is kept in
-> [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md). Nephele's contribution is
-> the cloud platform around it and the small app changes listed below.
+Nephele runs a small microservices application the way production systems
+run: on a 3-node Kubernetes cluster spread over two zones, scaling on load,
+healing itself, monitored with alert rules, locked down with strict security
+policy, and released by a pipeline that builds a real cluster and breaks it
+on purpose before anything ships. The same files describe the AWS deployment.
 
-## How it works
+> **Credit.** The voting application (`vote`, `worker`, `result`) comes from
+> Docker's open-source [example-voting-app](https://github.com/dockersamples/example-voting-app)
+> (Apache License 2.0); its README is kept in [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md).
+> Nephele's work is the reliable-queue rewrite of the worker, fixes to bugs
+> found in the original code, and the whole platform around it.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    U[User's browser] -->|vote| I[Ingress]
-    I --> V[vote<br/>Python Flask<br/>2-6 pods]
-    V -->|push vote| R[(Redis queue)]
-    R -->|pop vote| W[worker<br/>.NET<br/>1-4 pods]
-    W -->|save vote| D[(PostgreSQL)]
-    D -->|read totals| S[result<br/>Node.js]
-    S -->|live updates| I
-    I -->|results| U
-    P[Prometheus] -.->|scrape /metrics| V
+    U[Browser] --> I[Ingress<br/>NGINX, retries]
+    I --> V[vote<br/>Python<br/>2-6 pods, 2 zones]
+    V -->|RPUSH| R[(Redis<br/>append-only file)]
+    R -->|LMOVE| W[worker<br/>.NET 8<br/>1-10 pods, KEDA]
+    W -->|upsert, then LREM| D[(PostgreSQL)]
+    D --> S[result<br/>Node.js]
+    S -->|WebSocket| I
+    P[Prometheus<br/>7 alert rules] -.-> V
+    P -.-> I
     G[Grafana] -.-> P
-    C[CronJob<br/>nightly backup] -.-> D
+    B[CronJob<br/>nightly backup] -.-> D
 ```
 
-1. A person opens the vote page and picks Cats or Dogs.
-2. The **vote** service puts the vote on a **Redis** queue and answers at once.
-3. The **worker** takes votes off the queue and saves them in **PostgreSQL**.
-4. The **result** service reads the totals and pushes them live to the results page.
-
-Each service runs in its own container and scales on its own.
-
-## What is in this repository
-
-| Path | What it is | Origin |
-| --- | --- | --- |
-| `vote/`, `worker/`, `result/` | The three application services | Upstream app, small Nephele changes |
-| `docker-compose.yml` | Development stack with hot reload | Upstream |
-| `docker-compose.nephele.yml` | Production-style stack + Prometheus/Grafana | Nephele |
-| `k8s/base/` | Kubernetes: Deployments, StatefulSet, Services, Ingress, HPA, PDB, CronJob, NetworkPolicy | Nephele |
-| `k8s/overlays/local` | Settings for the local kind cluster | Nephele |
-| `k8s/overlays/aws` | Settings for Amazon EKS with RDS and ElastiCache | Nephele |
-| `kind/cluster.yaml`, `scripts/` | One-command local cluster | Nephele |
-| `infra/terraform/` | AWS: VPC, EKS, RDS, ElastiCache, ECR | Nephele |
-| `.github/workflows/` | CI (test, build, scan, validate, publish) and CD to AWS | Nephele |
-| `monitoring/` | Prometheus config and a Grafana dashboard | Nephele |
-| `loadtest/k6-vote.js` | Load test that triggers autoscaling | Nephele |
-| `vote/tests/` | Unit tests for the vote service | Nephele |
-| `k8s-specifications/` | The upstream's original basic manifests, kept for comparison | Upstream |
-
-### Changes made to the application code
-
-- All three services read their database and Redis addresses and passwords
-  from environment variables instead of hard-coded values, so Kubernetes and
-  AWS can configure them.
-- `vote` and `result` gained `/healthz` (liveness) and `/readyz` (readiness)
-  endpoints for Kubernetes probes.
-- `vote` exposes Prometheus metrics at `/metrics` (votes received, queue depth)
-  and rejects unknown vote options.
-- `result` had a missing `require('path')`, now fixed.
+A vote is answered as soon as it is on the queue. A worker **moves** it into
+its own processing list, saves it with an upsert, and only then removes it, so
+a crash at any point loses nothing and a retry is harmless
+([ADR 0003](docs/adr/0003-reliable-queue-at-least-once.md)).
 
 ## Run it
 
-### 1. Docker Compose (simplest)
+### Kubernetes on your laptop (recommended)
 
+Needs Docker Desktop, [kind](https://kind.sigs.k8s.io/) and `kubectl`.
+
+```bash
+scripts/kind-up.sh            # Git Bash, macOS, Linux
+```
 ```powershell
-docker compose -f docker-compose.nephele.yml up -d --build
+powershell -ExecutionPolicy Bypass -File scripts\kind-up.ps1   # Windows
 ```
 
-- Vote: http://localhost:8080
-- Results: http://localhost:8081
+One command creates the 3-node cluster, installs the NGINX Ingress controller,
+metrics-server and KEDA, builds and loads the images, and deploys Nephele and
+the monitoring stack.
 
-Scale the worker and add monitoring:
+| | |
+| --- | --- |
+| Vote | http://vote.localtest.me:8888 |
+| Results | http://result.localtest.me:8888 (JSON: `/api/results`) |
+| Grafana | http://grafana.localtest.me:8888 |
+| Prometheus | http://prometheus.localtest.me:8888 (Alerts tab) |
 
-```powershell
-docker compose -f docker-compose.nephele.yml up -d --scale worker=3
+Remove it with `kind delete cluster --name nephele`.
+
+### Docker Compose
+
+```bash
+docker compose -f docker-compose.nephele.yml up -d --build
 docker compose -f docker-compose.nephele.yml --profile monitoring up -d
 ```
 
-- Prometheus: http://localhost:9090
-- Grafana: http://localhost:3300 (dashboard "Nephele overview")
+Vote http://localhost:8080, results http://localhost:8081, Grafana http://localhost:3300.
 
-### 2. Kubernetes on your laptop (kind)
+## Prove it
 
-Needs Docker Desktop, `kind` and `kubectl`.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\kind-up.ps1
-```
-
-- Vote: http://vote.localtest.me:8888
-- Results: http://result.localtest.me:8888
-
-Useful demo commands:
-
-```powershell
-kubectl -n nephele get pods,svc,hpa,ingress,cronjob
-kubectl -n nephele delete pod -l app=vote          # self-healing: pods come back
-kubectl -n nephele create job --from=cronjob/db-backup backup-now   # run a backup now
-kubectl -n nephele logs job/backup-now
-k6 run loadtest/k6-vote.js                         # load test
-kubectl -n nephele get hpa -w                      # watch autoscaling
-```
-
-Remove it with `scripts\kind-down.ps1`.
-
-#### Queue-based worker autoscaling (KEDA, recommended)
-
-The worker waits on Redis most of the time, so its CPU stays low even when
-thousands of votes are queued, and the CPU autoscaler never adds workers.
-KEDA scales it on the queue length instead (one worker per 50 waiting votes, 1 to 10):
-
-```powershell
-kubectl apply --server-side -f https://github.com/kedacore/keda/releases/download/v2.16.1/keda-2.16.1.yaml
-kubectl -n nephele delete hpa worker
-kubectl apply -k k8s/overlays/local-keda
-```
-
-Measured with the same 3-minute load test (`loadtest/results/`):
-
-| | CPU autoscaler | KEDA (queue length) |
-| --- | --- | --- |
-| Votes sent / failed | 11,384 / 0 | 11,472 / 0 |
-| p95 response time | 84.1 ms | 63.8 ms |
-| Workers at peak | 4 (never scaled on load) | 10 |
-| Most votes waiting in queue | 5,692 | 1,183 |
-| Queue empty after load stopped | about 3.5 minutes | about 15 seconds |
-| Votes lost | 0 | 0 |
-
-### 3. AWS (EKS)
-
-```powershell
-cd infra/terraform
-terraform init
-terraform apply          # VPC, EKS, RDS, ElastiCache, ECR (paid resources)
-```
-
-Then put the `db_endpoint` and `redis_endpoint` outputs into
-`k8s/overlays/aws/kustomization.yaml`, set the repository variables listed at
-the top of `.github/workflows/nephele-cd-aws.yml`, and run the **nephele-cd-aws**
-workflow. Run `terraform destroy` after the demo: EKS, RDS, ElastiCache and the
-NAT gateway are billed by the hour.
-
-## Tests
-
-```powershell
-docker build --target test -t nephele/vote:test vote
-docker run --rm nephele/vote:test
-```
-
-## Cloud concepts shown
-
-| Concept | Where |
+| Command | What it does |
 | --- | --- |
-| Microservices in three languages | `vote` (Python), `worker` (.NET), `result` (Node.js) |
-| Asynchronous messaging | Redis queue between `vote` and `worker` |
-| Containers | Dockerfiles, multi-stage builds, Compose |
-| Orchestration | Kubernetes Deployments, StatefulSet, Services |
-| Elasticity | HorizontalPodAutoscaler on `vote` and `worker` |
-| High availability | 2+ vote replicas, PodDisruptionBudget, rolling updates with zero unavailable |
-| Self-healing | Liveness and readiness probes |
-| Persistent storage | StatefulSet volume for Postgres, backup volume |
-| Scheduled jobs | Nightly `db-backup` CronJob |
-| Network security | NetworkPolicies, Secrets, private subnets on AWS |
-| Infrastructure as code | Terraform for VPC, EKS, RDS, ElastiCache, ECR |
-| Managed cloud services | RDS (DBaaS), ElastiCache, ECR, EKS |
-| CI/CD | GitHub Actions: test, build, scan, validate, publish, deploy |
-| Observability | Prometheus metrics, Grafana dashboard |
-| Portability | Same images and base manifests on a laptop and on AWS |
+| `scripts/smoke-test.sh` | Votes in through the Ingress, out through the result API; every Prometheus job healthy |
+| `scripts/chaos-test.sh` | 9 failure scenarios with a Markdown report in `tests/results/` |
+| `scripts/load-test.sh k6-vote.js <name>` | k6 load test run as a Job inside the cluster, with scaling samples |
+| `scripts/load-test.sh k6-stress.js <name>` | Stress test to 150 simultaneous voters |
+| `docker build --target test -t t vote && docker run --rm t` | vote unit tests |
+| `docker build -t r result && docker run --rm r npm test` | result unit tests |
+
+### Resilience suite (`scripts/chaos-test.sh`)
+
+| # | Scenario | Pass condition |
+| --- | --- | --- |
+| 1 | Kill a vote pod while users vote | Replaced, no failed votes |
+| 2 | Force-kill every worker with 3,000 votes in progress | All 3,000 saved |
+| 3 | Restart Redis with 1,000 votes queued | Queue survives, all 1,000 saved |
+| 4 | Restart PostgreSQL while users vote | No failed votes, all 500 saved, results page recovers |
+| 5 | Stop a whole worker node | Vote pods running on the surviving nodes |
+| 6 | Rolling release under traffic | No failed votes |
+| 7 | Unlabelled pod tries the database | Blocked; labelled pod allowed |
+| 8 | Back up, restore into a scratch database | Same row count |
+| 9 | Start a root pod | Refused by Pod Security admission |
+
+Simulated users vote every 0.2 s from a probe pod **inside** the cluster, so
+results measure the platform rather than the host's port forwarding. Latest
+report: [tests/results/chaos-latest.md](tests/results/chaos-latest.md); the CI
+run's report is in [tests/results/ci/](tests/results/ci/).
+
+### Performance history (same 3-minute, 60-user k6 test)
+
+| Version | Change | Most votes waiting | Queue empty after load | Failed |
+| --- | --- | --- | --- | --- |
+| 1 | Workers scaled on CPU | 5,692 | ~3.5 min | 0 |
+| 2 | Workers scaled on queue length (KEDA) | 1,183 | ~15 s | 0 |
+| 3 | Reliable queue, no fixed delay per vote, hardened platform | see `loadtest/results/v3-*` | | 0 |
+
+## What is in the repository
+
+| Path | Contents |
+| --- | --- |
+| `vote/`, `worker/`, `result/` | The application services (upstream code, changed as listed below) |
+| `k8s/base/` | Namespace (Pod Security restricted), StatefulSets for Postgres and Redis, Deployments, Services, Ingress, HPA, PDB, CronJob, NetworkPolicies, LimitRange, ResourceQuota |
+| `k8s/overlays/` | `local`, `local-keda` (default), `aws` |
+| `k8s/addons/monitoring/` | Prometheus, alert rules, kube-state-metrics, Grafana dashboards |
+| `k8s/jobs/` | Restore drill, chaos probe, in-cluster k6 Job |
+| `kind/cluster.yaml` | 1 control plane + 2 workers in zone-a and zone-b |
+| `scripts/` | `kind-up`, `smoke-test`, `chaos-test`, `load-test` |
+| `infra/terraform/` | AWS: VPC over 2 AZs, EKS, RDS, ElastiCache, ECR |
+| `.github/workflows/` | CI (9 jobs incl. end-to-end on kind) and CD to EKS |
+| `loadtest/` | k6 scripts and saved results |
+| `docs/adr/` | 7 architecture decision records |
+| `docs/RUNBOOK.md` | What to do for each alert |
+
+## Changes to the upstream application
+
+Bugs found and fixed:
+
+1. **worker** popped a vote before saving it: a crash in between lost the vote. Now a reliable queue (LMOVE, upsert, LREM, recovery of dead workers' lists).
+2. **worker** skipped the vote in hand when the database connection had dropped. Now the vote goes back on the queue.
+3. **result** kept one database client forever: after a database restart the page froze. Now a connection pool.
+4. **result** was missing `require('path')` in its `/` route.
+
+Other changes: settings from environment variables; `/healthz` and `/readyz`; vote metrics at `/metrics`; non-root users on port 8080; Node 22 and .NET 8 (both previous versions were end-of-life); graceful shutdown; heartbeat-based liveness for the worker; short Redis timeouts; input validation.
+
+## AWS
+
+`infra/terraform` builds a VPC over two Availability Zones, EKS with a managed
+node group, RDS PostgreSQL, ElastiCache Redis and ECR. The `aws` overlay
+replaces the in-cluster data stores with ExternalName Services pointing at RDS
+and ElastiCache, so no application setting changes. Deploy with the
+`nephele-cd-aws` workflow (OIDC, no stored keys). Validated in CI; not applied,
+because the AWS account available for this project is governed by an
+organisation policy that denies EKS, EC2, RDS and ECR.
 
 ## License
 
