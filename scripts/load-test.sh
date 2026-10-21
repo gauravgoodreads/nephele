@@ -26,8 +26,13 @@ kubectl get ns chaos >/dev/null 2>&1 || kubectl create ns chaos >/dev/null
 kubectl label ns chaos pod-security.kubernetes.io/enforce=restricted --overwrite >/dev/null
 kubectl -n chaos create configmap k6-scripts --from-file=loadtest/k6-vote.js --from-file=loadtest/k6-stress.js \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-sed -e "s/JOB_NAME/$JOB/" -e "s/K6_SCRIPT/$SCRIPT/" k8s/jobs/k6-load.yaml | kubectl apply -f - >/dev/null
-kubectl -n chaos wait --for=condition=ready pod -l "job-name=$JOB" --timeout=180s >/dev/null
+# The vote site's host name differs per cluster (localtest.me on kind, nip.io on AWS).
+VOTE_HOST="$(kubectl -n nephele get ingress nephele -o jsonpath='{.spec.rules[0].host}')"
+sed -e "s/JOB_NAME/$JOB/" -e "s/K6_SCRIPT/$SCRIPT/" -e "s/VOTE_HOST/$VOTE_HOST/" k8s/jobs/k6-load.yaml | kubectl apply -f - >/dev/null
+if ! kubectl -n chaos wait --for=condition=ready pod -l "job-name=$JOB" --timeout=180s >/dev/null; then
+  echo "The k6 pod did not start; see: kubectl -n chaos describe pod -l job-name=$JOB" >&2
+  exit 1
+fi
 
 echo "seconds,vote_pods,worker_pods,queue,in_flight,saved" > "$OUT/$NAME-scaling.csv"
 start=$(date +%s)

@@ -1,15 +1,18 @@
-# AWS (EKS): images from ECR, Postgres on RDS, Redis on ElastiCache.
+# AWS (EKS): images from ECR, Postgres on RDS, Redis on ElastiCache,
+# and the worker scaled on queue length by KEDA, as on the local cluster.
 #
-# Before applying:
+# scripts/aws-up.sh does all of this after `terraform apply`. By hand:
 #   1. terraform apply in infra/terraform
 #   2. replace the two REPLACE_ME endpoints below with the Terraform outputs
 #      db_endpoint and redis_endpoint
 #   3. create secrets.env from secrets.env.example (never commit it)
 #   4. set the image names (the CD workflow does this with `kustomize edit set image`)
+#   5. install KEDA (see k8s/overlays/local-keda)
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ../../base
+  - worker-scaledobject.yaml
 images:
   - name: nephele/vote
     newName: ACCOUNT_ID.dkr.ecr.ap-south-1.amazonaws.com/nephele-vote
@@ -30,6 +33,14 @@ secretGenerator:
 patches:
   # In-cluster Postgres, Redis and the backup CronJob are not needed on AWS.
   - path: remove-in-cluster-data.yaml
+  # KEDA creates and owns its own autoscaler for the worker.
+  - patch: |-
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: worker
+        namespace: nephele
   # The apps keep using the names "db" and "redis"; on AWS those names
   # point at the managed services, so no application setting changes.
   - target: { kind: Service, name: db }

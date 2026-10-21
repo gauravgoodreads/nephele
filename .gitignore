@@ -19,3 +19,5 @@ __pycache__/
 .kind-up.log
 .chaos.log
 .load*.log
+*.tfvars
+!*.tfvars.example

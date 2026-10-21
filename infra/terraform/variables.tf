@@ -11,9 +11,11 @@ variable "name" {
 }
 
 variable "kubernetes_version" {
+  # Keep this inside EKS standard support: older versions bill the much
+  # higher extended-support rate for the control plane.
   description = "EKS Kubernetes version"
   type        = string
-  default     = "1.31"
+  default     = "1.36"
 }
 
 variable "node_instance_type" {
@@ -32,4 +34,11 @@ variable "db_multi_az" {
   description = "Keep a standby database in a second Availability Zone"
   type        = bool
   default     = false
+}
+
+variable "db_backup_retention_days" {
+  # AWS Free plan accounts allow at most 1 day.
+  description = "Days of automated RDS backups (replace the in-cluster backup CronJob)"
+  type        = number
+  default     = 7
 }

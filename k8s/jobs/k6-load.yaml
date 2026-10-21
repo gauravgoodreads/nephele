@@ -1,7 +1,9 @@
 # Load test as a Kubernetes Job: k6 runs inside the cluster and calls the
 # Ingress controller directly, so the result measures the platform, not the
-# laptop's port forwarding. JOB_NAME and K6_SCRIPT are filled in by
+# laptop's port forwarding. JOB_NAME, K6_SCRIPT and VOTE_HOST are filled in by
 # scripts/load-test.sh; the scripts come from the ConfigMap k6-scripts.
+# On kind it prefers the control-plane node, away from the application pods;
+# EKS has no schedulable control plane, so there it runs on a worker node.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -16,7 +18,13 @@ spec:
       labels: { app: k6-load }
     spec:
       restartPolicy: Never
-      nodeSelector: { node-role.kubernetes.io/control-plane: "" }
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - { key: node-role.kubernetes.io/control-plane, operator: Exists }
       tolerations:
         - { key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule }
       securityContext:
@@ -28,7 +36,7 @@ spec:
           image: grafana/k6:0.54.0
           env:
             - { name: BASE_URL, value: "http://ingress-nginx-controller.ingress-nginx.svc" }
-            - { name: HOST_HEADER, value: vote.localtest.me }
+            - { name: HOST_HEADER, value: VOTE_HOST }
           command: ["sh", "-c"]
           args:
             - |

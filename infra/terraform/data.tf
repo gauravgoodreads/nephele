@@ -59,7 +59,7 @@ resource "aws_db_instance" "db" {
   publicly_accessible    = false
   multi_az               = var.db_multi_az
 
-  backup_retention_period = 7 # replaces the in-cluster backup CronJob
+  backup_retention_period = var.db_backup_retention_days
   skip_final_snapshot     = true
   deletion_protection     = false
 }
