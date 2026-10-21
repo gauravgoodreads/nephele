@@ -14,3 +14,8 @@ k8s/overlays/aws/secrets.env
 .pytest_cache/
 __pycache__/
 
+
+# local run logs
+.kind-up.log
+.chaos.log
+.load*.log
