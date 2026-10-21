@@ -97,9 +97,19 @@ Vote http://localhost:8080, results http://localhost:8081, Grafana http://localh
 | 9 | Start a root pod | Refused by Pod Security admission |
 
 Simulated users vote every 0.2 s from a probe pod **inside** the cluster, so
-results measure the platform rather than the host's port forwarding. Latest
-report: [tests/results/chaos-latest.md](tests/results/chaos-latest.md); the CI
-run's report is in [tests/results/ci/](tests/results/ci/).
+results measure the platform rather than the host's port forwarding.
+**Final run: 9 of 9 passed** (e.g. 3,000 of 3,000 votes saved after every
+worker was force-killed; 0 of 172 votes failed during a rolling release).
+Reports and history: [tests/results/](tests/results/).
+
+### Load tests (k6 as a Job inside the cluster)
+
+| | 60 users, 3 min | 150 users, 4.5 min |
+| --- | --- | --- |
+| Votes / failed | 8,182 / 0 | 17,629 / 32 (0.18%) |
+| Median / p95 | 64 ms / 496 ms | 499 ms / 3.08 s |
+| Vote pods / worker pods | 2-6 / 1-5 | 6 / 10 (both at maximum) |
+| Most votes waiting | 247 | 5,174 (drained; 2 alerts fired) |
 
 ### Performance history (same 3-minute, 60-user k6 test)
 
@@ -107,7 +117,7 @@ run's report is in [tests/results/ci/](tests/results/ci/).
 | --- | --- | --- | --- | --- |
 | 1 | Workers scaled on CPU | 5,692 | ~3.5 min | 0 |
 | 2 | Workers scaled on queue length (KEDA) | 1,183 | ~15 s | 0 |
-| 3 | Reliable queue, no fixed delay per vote, hardened platform | see `loadtest/results/v3-*` | | 0 |
+| 3 | Reliable queue, no per-vote delay, hardened 3-node platform | 247 | before the load ended | 0 |
 
 ## What is in the repository
 
