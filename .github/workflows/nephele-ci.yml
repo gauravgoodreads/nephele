@@ -71,12 +71,13 @@ jobs:
       - name: Validate every overlay and add-on
         run: |
           cp k8s/overlays/aws/secrets.env.example k8s/overlays/aws/secrets.env
-          for dir in k8s/overlays/local k8s/overlays/aws k8s/addons/monitoring; do
+          # Custom resources (KEDA's ScaledObject) are checked against the
+          # community CRD schema catalog, so nothing is skipped.
+          CRDS='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          for dir in k8s/overlays/local k8s/overlays/local-keda k8s/overlays/aws k8s/addons/monitoring; do
             echo "== $dir"
-            kubectl kustomize $dir | kubeconform -strict -summary -
+            kubectl kustomize $dir | kubeconform -strict -summary -schema-location default -schema-location "$CRDS" -
           done
-          echo "== k8s/overlays/local-keda (KEDA's ScaledObject is a custom resource, so its schema is skipped)"
-          kubectl kustomize k8s/overlays/local-keda | kubeconform -strict -summary -ignore-missing-schemas -
           kubeconform -strict -summary k8s/jobs/
 
   validate-terraform:
