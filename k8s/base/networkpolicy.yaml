@@ -1,0 +1,30 @@
+# Only the services that need the database or the queue may reach them.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-allow-clients
+spec:
+  podSelector:
+    matchLabels: { app: db }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { db-client: "true" }
+      ports:
+        - port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-allow-clients
+spec:
+  podSelector:
+    matchLabels: { app: redis }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { redis-client: "true" }
+      ports:
+        - port: 6379

@@ -4,3 +4,13 @@ bin/
 obj/
 .vs/
 node_modules/
+
+# Nephele
+k8s/overlays/aws/secrets.env
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+.pytest_cache/
+__pycache__/
+

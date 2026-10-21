@@ -1,0 +1,49 @@
+# Result: live results page. Kept at one replica because its WebSocket
+# connections are held in memory (several replicas would need sticky sessions).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: result
+  labels: { app: result }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: result }
+  template:
+    metadata:
+      labels: { app: result, db-client: "true" }
+    spec:
+      enableServiceLinks: false # only explicit settings, no injected *_PORT variables
+      containers:
+        - name: result
+          image: nephele/result
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: nephele-secrets, key: DATABASE_URL }
+          ports:
+            - containerPort: 80
+              name: http
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: result
+  labels: { app: result }
+spec:
+  selector: { app: result }
+  ports:
+    - port: 80
+      targetPort: http

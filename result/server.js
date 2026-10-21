@@ -1,4 +1,5 @@
 var express = require('express'),
+    path = require('path'),
     async = require('async'),
     { Pool } = require('pg'),
     cookieParser = require('cookie-parser'),
@@ -17,9 +18,11 @@ io.on('connection', function (socket) {
   });
 });
 
+// Nephele: the database address comes from the environment (Kubernetes Secret)
 var pool = new Pool({
-  connectionString: 'postgres://postgres:postgres@db/postgres'
+  connectionString: process.env.DATABASE_URL || 'postgres://postgres:postgres@db/postgres'
 });
+var dbReady = false;
 
 async.retry(
   {times: 1000, interval: 1000},
@@ -36,6 +39,7 @@ async.retry(
       return console.error("Giving up");
     }
     console.log("Connected to db");
+    dbReady = true;
     getVotes(client);
   }
 );
@@ -63,6 +67,15 @@ function collectVotesFromResult(result) {
   return votes;
 }
 
+// Nephele: probes for Kubernetes (liveness = process up, readiness = database connected)
+app.get('/healthz', function (req, res) {
+  res.json({ status: 'ok' });
+});
+
+app.get('/readyz', function (req, res) {
+  res.status(dbReady ? 200 : 503).json({ ready: dbReady });
+});
+
 app.use(cookieParser());
 app.use(express.urlencoded());
 app.use(express.static(__dirname + '/views'));
@@ -74,4 +87,16 @@ app.get('/', function (req, res) {
 server.listen(port, function () {
   var port = server.address().port;
   console.log('App running on port ' + port);
+});
+
+// Nephele: shut down cleanly when Kubernetes or Docker stops the container
+['SIGTERM', 'SIGINT'].forEach(function (signal) {
+  process.on(signal, function () {
+    console.log('Received ' + signal + ', shutting down');
+    io.close();
+    server.close(function () {
+      pool.end(function () { process.exit(0); });
+    });
+    setTimeout(function () { process.exit(0); }, 5000).unref();
+  });
 });

@@ -1,0 +1,13 @@
+# Non-secret settings shared by the services. Passwords live in the Secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nephele-config
+data:
+  REDIS_HOST: redis
+  DB_HOST: db
+  DB_USER: postgres
+  DB_NAME: postgres
+  OPTION_A: Cats
+  OPTION_B: Dogs
+  GUNICORN_WORKERS: "2"

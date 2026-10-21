@@ -1,0 +1,17 @@
+# KEDA runs in its own namespace and must read the queue length from Redis.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-allow-keda
+  namespace: nephele
+spec:
+  podSelector:
+    matchLabels: { app: redis }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: keda
+      ports:
+        - port: 6379

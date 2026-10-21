@@ -1,0 +1,52 @@
+{
+  "uid": "nephele-overview",
+  "title": "Nephele overview",
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Votes received (total)",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(nephele_votes_received)" }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Votes waiting in the queue",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "nephele_queue_depth" }]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Vote service up",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "up{job=\"vote\"}" }]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Votes per second, by option",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "rate(nephele_votes_received[1m])", "legendFormat": "option {{option}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Queue depth over time",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "nephele_queue_depth", "legendFormat": "waiting votes" }]
+    }
+  ]
+}

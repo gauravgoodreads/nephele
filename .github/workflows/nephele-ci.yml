@@ -1,0 +1,98 @@
+# Continuous integration: every push and pull request is tested, built and
+# checked; pushes to main also publish versioned images to GitHub Container Registry.
+name: nephele-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-vote:
+    name: Unit tests (vote)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests inside the test image
+        run: |
+          docker build --target test -t nephele/vote:test vote
+          docker run --rm nephele/vote:test
+
+  build-images:
+    name: Build images
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [vote, result, worker]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ${{ matrix.service }}
+        run: docker build -t nephele/${{ matrix.service }}:ci ${{ matrix.service }}
+      - name: Scan for critical vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: nephele/${{ matrix.service }}:ci
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "0" # report only; set to "1" to fail the build
+
+  validate-kubernetes:
+    name: Validate Kubernetes manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+      - name: Validate local and AWS overlays
+        run: |
+          cp k8s/overlays/aws/secrets.env.example k8s/overlays/aws/secrets.env
+          for overlay in local aws; do
+            echo "== $overlay"
+            kubectl kustomize k8s/overlays/$overlay | kubeconform -strict -summary -
+          done
+          echo "== local-keda (KEDA's ScaledObject is a custom resource, so its schema is skipped)"
+          kubectl kustomize k8s/overlays/local-keda | kubeconform -strict -summary -ignore-missing-schemas -
+
+  validate-terraform:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  publish:
+    name: Publish images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test-vote, build-images, validate-kubernetes, validate-terraform]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push, tagged with the commit
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          for svc in vote result worker; do
+            image="ghcr.io/$owner/nephele-$svc"
+            docker build -t "$image:${GITHUB_SHA}" -t "$image:latest" "$svc"
+            docker push "$image:${GITHUB_SHA}"
+            docker push "$image:latest"
+          done

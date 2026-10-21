@@ -1,0 +1,43 @@
+# On AWS, managed RDS and ElastiCache replace the in-cluster Postgres and Redis,
+# and RDS automated backups replace the backup CronJob.
+$patch: delete
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db
+  namespace: nephele
+---
+$patch: delete
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: nephele
+---
+$patch: delete
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: db-backup
+  namespace: nephele
+---
+$patch: delete
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: db-backups
+  namespace: nephele
+---
+$patch: delete
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-allow-clients
+  namespace: nephele
+---
+$patch: delete
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-allow-clients
+  namespace: nephele

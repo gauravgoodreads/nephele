@@ -1,0 +1,32 @@
+# Worker: takes votes off the Redis queue and saves them in PostgreSQL.
+# No Service: nothing calls it; it pulls work from the queue.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  labels: { app: worker }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: worker }
+  template:
+    metadata:
+      labels: { app: worker, db-client: "true", redis-client: "true" }
+    spec:
+      enableServiceLinks: false # only explicit settings, no injected *_PORT variables
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: worker
+          image: nephele/worker
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: nephele-config }
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: nephele-secrets, key: DB_PASSWORD }
+          # The worker polls Redis every 100 ms and idles at about 25m CPU,
+          # so the request is sized to keep idle use well under the 50% HPA target.
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }

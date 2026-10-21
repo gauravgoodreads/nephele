@@ -1,0 +1,55 @@
+# Nightly database backup at 02:00. Keeps the 7 newest dumps on a volume.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: db-backups
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: db-backup
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels: { app: db-backup, db-client: "true" }
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: backup
+              image: postgres:15-alpine
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: nephele-secrets, key: DB_PASSWORD }
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  file=/backups/votes-$(date +%Y%m%d-%H%M%S).sql.gz
+                  pg_dump -h db -U postgres postgres | gzip > "$file"
+                  echo "saved $file ($(wc -c < "$file") bytes)"
+                  ls -1t /backups/*.sql.gz | tail -n +8 | xargs -r rm --
+                  echo "backups kept:"; ls -1 /backups
+              resources:
+                requests: { cpu: 25m, memory: 32Mi }
+                limits: { cpu: 250m, memory: 128Mi }
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: db-backups

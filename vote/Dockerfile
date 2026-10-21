@@ -19,6 +19,13 @@ RUN pip install watchdog
 ENV FLASK_ENV=development
 CMD ["python", "app.py"]
 
+# Nephele: test stage runs the unit tests in CI (never deployed)
+FROM base AS test
+COPY requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements-dev.txt
+COPY . .
+CMD ["python", "-m", "pytest", "-q", "tests"]
+
 # final defines the stage that will bundle the application for production
 FROM base AS final
 
@@ -28,5 +35,6 @@ COPY . .
 # Make port 80 available for links and/or publish
 EXPOSE 80
 
-# Define our command to be run when launching the container
-CMD ["gunicorn", "app:app", "-b", "0.0.0.0:80", "--log-file", "-", "--access-logfile", "-", "--workers", "4", "--keep-alive", "0"]
+# Nephele: worker count comes from GUNICORN_WORKERS so Kubernetes can size each pod
+ENV GUNICORN_WORKERS=2
+CMD gunicorn app:app -b 0.0.0.0:80 --log-file - --access-logfile - --workers ${GUNICORN_WORKERS} --keep-alive 0

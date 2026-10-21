@@ -1,0 +1,127 @@
+# Nephele production-style Compose stack.
+#
+# The upstream docker-compose.yml is for development (code mounted, hot reload).
+# This file runs the built images the way they run in Kubernetes:
+# settings from environment variables, health checks, restart policy,
+# a scalable worker, and an optional Prometheus + Grafana monitoring profile.
+#
+#   docker compose -f docker-compose.nephele.yml up -d --build
+#   docker compose -f docker-compose.nephele.yml up -d --scale worker=3
+#   docker compose -f docker-compose.nephele.yml --profile monitoring up -d
+
+name: nephele
+
+x-db-env: &db-env
+  DB_HOST: db
+  DB_USER: postgres
+  DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+  DB_NAME: postgres
+
+services:
+  vote:
+    build:
+      context: ./vote
+      target: final
+    image: nephele/vote:local
+    environment:
+      REDIS_HOST: redis
+      OPTION_A: ${OPTION_A:-Cats}
+      OPTION_B: ${OPTION_B:-Dogs}
+      GUNICORN_WORKERS: "2"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+    networks: [front-tier, back-tier]
+
+  result:
+    build: ./result
+    image: nephele/result:local
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@db/postgres
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost/readyz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    ports:
+      - "8081:80"
+    restart: unless-stopped
+    networks: [front-tier, back-tier]
+
+  worker:
+    build: ./worker
+    image: nephele/worker:local
+    environment:
+      <<: *db-env
+      REDIS_HOST: redis
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [back-tier]
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+    restart: unless-stopped
+    networks: [back-tier]
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+    restart: unless-stopped
+    networks: [back-tier]
+
+  # ---- monitoring profile -------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    profiles: ["monitoring"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks: [front-tier, back-tier]
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    profiles: ["monitoring"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3300:3000"
+    depends_on: [prometheus]
+    networks: [front-tier]
+
+volumes:
+  db-data:
+
+networks:
+  front-tier:
+  back-tier:

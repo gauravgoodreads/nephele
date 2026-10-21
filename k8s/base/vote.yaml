@@ -1,0 +1,56 @@
+# Vote: the web page people vote on. Stateless, so it runs as several pods
+# behind one Service and the autoscaler adds more under load.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vote
+  labels: { app: vote }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: vote }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app: vote, redis-client: "true" }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "80"
+        prometheus.io/path: /metrics
+    spec:
+      # Kubernetes would otherwise inject REDIS_PORT=tcp://<ip>:6379 for the
+      # "redis" Service, which clashes with the app's own REDIS_PORT setting.
+      enableServiceLinks: false
+      containers:
+        - name: vote
+          image: nephele/vote
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: nephele-config }
+          ports:
+            - containerPort: 80
+              name: http
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vote
+  labels: { app: vote }
+spec:
+  selector: { app: vote }
+  ports:
+    - port: 80
+      targetPort: http

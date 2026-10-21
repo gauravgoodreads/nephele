@@ -1,0 +1,61 @@
+# Continuous deployment to Amazon EKS. Run by hand from the Actions tab
+# after `terraform apply`. Uses GitHub OIDC, so no AWS keys are stored.
+#
+# Repository settings needed:
+#   variables: AWS_ROLE_ARN, AWS_REGION, EKS_CLUSTER (e.g. nephele)
+#   secrets:   DB_PASSWORD  (from `terraform output -raw db_password`)
+name: nephele-cd-aws
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production # add a required reviewer here for a manual approval gate
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push images to ECR
+        run: |
+          for svc in vote result worker; do
+            image="${{ steps.ecr.outputs.registry }}/nephele-$svc:${GITHUB_SHA}"
+            docker build -t "$image" "$svc"
+            docker push "$image"
+          done
+
+      - name: Point the AWS overlay at the new images and secrets
+        working-directory: k8s/overlays/aws
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          for svc in vote result worker; do
+            kustomize edit set image "nephele/$svc=${{ steps.ecr.outputs.registry }}/nephele-$svc:${GITHUB_SHA}"
+          done
+          printf 'DB_PASSWORD=%s\nDATABASE_URL=postgres://postgres:%s@db/postgres\n' "$DB_PASSWORD" "$DB_PASSWORD" > secrets.env
+
+      - name: Deploy
+        run: |
+          aws eks update-kubeconfig --name "${{ vars.EKS_CLUSTER }}" --region "$AWS_REGION"
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.12.0/deploy/static/provider/aws/deploy.yaml
+          kubectl apply -k k8s/overlays/aws
+          for d in vote result worker; do
+            kubectl -n nephele rollout status deployment/$d --timeout=300s
+          done
+
+      - name: Show the load balancer address
+        run: kubectl -n ingress-nginx get svc ingress-nginx-controller

@@ -1,0 +1,23 @@
+# One entry point for both web pages, routed by host name.
+# *.localtest.me always resolves to 127.0.0.1, so no hosts-file edits are needed.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nephele
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: vote.localtest.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: vote, port: { number: 80 } }
+    - host: result.localtest.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: result, port: { number: 80 } }

@@ -1,0 +1,20 @@
+# Local cluster (kind): images built on this machine, development passwords.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - name: nephele/vote
+    newTag: local
+  - name: nephele/result
+    newTag: local
+  - name: nephele/worker
+    newTag: local
+secretGenerator:
+  - name: nephele-secrets
+    namespace: nephele
+    options:
+      disableNameSuffixHash: true
+    literals:
+      - DB_PASSWORD=postgres
+      - DATABASE_URL=postgres://postgres:postgres@db/postgres

@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: nephele
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: nephele
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - redis.yaml
+  - db.yaml
+  - vote.yaml
+  - result.yaml
+  - worker.yaml
+  - autoscaling.yaml
+  - ingress.yaml
+  - backup-cronjob.yaml
+  - networkpolicy.yaml

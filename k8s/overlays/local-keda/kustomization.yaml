@@ -1,0 +1,23 @@
+# Local cluster, with the worker scaled on QUEUE LENGTH by KEDA instead of CPU.
+#
+# Why: the worker spends most of its time waiting on Redis, so its CPU stays
+# low even when thousands of votes are queued. The CPU autoscaler never adds
+# workers; KEDA watches the queue itself.
+#
+# Needs KEDA installed first:
+#   kubectl apply --server-side -f https://github.com/kedacore/keda/releases/download/v2.16.1/keda-2.16.1.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../local
+  - worker-scaledobject.yaml
+  - allow-keda-to-redis.yaml
+patches:
+  # KEDA creates and owns its own autoscaler for the worker.
+  - patch: |-
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: worker
+        namespace: nephele
