@@ -1,4 +1,12 @@
+# Pod Security Admission: every pod in this namespace must meet the
+# "restricted" profile (non-root, no privilege escalation, all Linux
+# capabilities dropped, seccomp on). A pod that does not is refused.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: nephele
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

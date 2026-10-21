@@ -18,3 +18,20 @@ secretGenerator:
     literals:
       - DB_PASSWORD=postgres
       - DATABASE_URL=postgres://postgres:postgres@db/postgres
+patches:
+  # kind's volumes are local disks that cannot follow a pod to another node,
+  # so the data tier is kept together in zone-a and the stateless services
+  # spread over both zones. On AWS this patch does not apply: RDS and
+  # ElastiCache (optionally Multi-AZ) replace these StatefulSets.
+  - target: { kind: StatefulSet }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/affinity
+        value:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: topology.kubernetes.io/zone
+                      operator: In
+                      values: [zone-a]

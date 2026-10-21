@@ -1,0 +1,25 @@
+# Guard rails for the namespace: defaults for any container that forgets to
+# set resources, and a ceiling on what the whole namespace may request.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: defaults
+spec:
+  limits:
+    - type: Container
+      default: { cpu: 250m, memory: 256Mi }
+      defaultRequest: { cpu: 50m, memory: 64Mi }
+      max: { cpu: "1", memory: 1Gi }
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: nephele-quota
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 4Gi
+    limits.cpu: "12"
+    limits.memory: 8Gi
+    pods: "40"
+    persistentvolumeclaims: "6"

@@ -1,0 +1,62 @@
+# Restore drill: loads the newest backup into a scratch database and checks
+# that it holds the same number of votes as the live database.
+#   kubectl -n nephele create -f k8s/jobs/restore-drill.yaml
+#   kubectl -n nephele logs -f job/<name printed above>
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: restore-drill-
+  namespace: nephele
+  labels: { app: restore-drill }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels: { app: restore-drill, db-client: "true" }
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: restore
+          image: postgres:15-alpine
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: { name: nephele-secrets, key: DB_PASSWORD }
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              latest=$(ls -1t /backups/*.sql.gz | head -n 1)
+              echo "restoring $latest into database restore_drill"
+              psql -h db -U postgres -q -c "DROP DATABASE IF EXISTS restore_drill" -c "CREATE DATABASE restore_drill"
+              gunzip -c "$latest" | psql -h db -U postgres -q -d restore_drill >/dev/null
+              restored=$(psql -h db -U postgres -At -d restore_drill -c "SELECT count(*) FROM votes")
+              echo "RESTORED_ROWS=$restored"
+              psql -h db -U postgres -q -c "DROP DATABASE restore_drill"
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: backups
+              mountPath: /backups
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: backups
+          persistentVolumeClaim:
+            claimName: db-backups
+        - name: tmp
+          emptyDir: {}

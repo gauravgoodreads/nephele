@@ -14,7 +14,21 @@ spec:
       labels: { app: worker, db-client: "true", redis-client: "true" }
     spec:
       enableServiceLinks: false # only explicit settings, no injected *_PORT variables
+      # Time to finish the vote in hand after SIGTERM (the worker stops taking new ones).
       terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          nodeTaintsPolicy: Honor
+          labelSelector:
+            matchLabels: { app: worker }
+      tolerations:
+        - { key: node.kubernetes.io/not-ready, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
+        - { key: node.kubernetes.io/unreachable, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
       containers:
         - name: worker
           image: nephele/worker
@@ -25,8 +39,31 @@ spec:
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef: { name: nephele-secrets, key: DB_PASSWORD }
-          # The worker polls Redis every 100 ms and idles at about 25m CPU,
+          # The worker writes a heartbeat file every 5 s while its loop runs.
+          # If the loop hangs, the file goes stale and Kubernetes restarts the pod.
+          # Startup: up to 5 minutes for Redis and PostgreSQL to come up first.
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "test -f /tmp/worker-heartbeat"]
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "test $(( $(date +%s) - $(stat -c %Y /tmp/worker-heartbeat) )) -lt 60"]
+            periodSeconds: 15
+            timeoutSeconds: 5
+          # The worker polls Redis every 100 ms when idle and uses about 25m CPU,
           # so the request is sized to keep idle use well under the 50% HPA target.
           resources:
             requests: { cpu: 100m, memory: 64Mi }
             limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -1,5 +1,9 @@
 # Local Kubernetes cluster for Nephele, running inside Docker.
-# Port 8888 on this computer reaches the Ingress controller inside the cluster.
+#
+# One control-plane node (also runs the Ingress controller) and two worker
+# nodes labelled as two availability zones, so zone spreading and a node
+# failure can be tested on a laptop. Port 8888 on this computer reaches the
+# Ingress controller inside the cluster.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: nephele
@@ -15,3 +19,9 @@ nodes:
       - containerPort: 80
         hostPort: 8888
         protocol: TCP
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-a
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-b

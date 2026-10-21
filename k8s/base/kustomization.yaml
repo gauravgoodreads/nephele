@@ -6,6 +6,7 @@ labels:
       app.kubernetes.io/part-of: nephele
 resources:
   - namespace.yaml
+  - governance.yaml
   - configmap.yaml
   - redis.yaml
   - db.yaml

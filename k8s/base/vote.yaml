@@ -1,5 +1,5 @@
 # Vote: the web page people vote on. Stateless, so it runs as several pods
-# behind one Service and the autoscaler adds more under load.
+# behind one Service, spread across zones, and the autoscaler adds more under load.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,12 +17,29 @@ spec:
       labels: { app: vote, redis-client: "true" }
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "80"
+        prometheus.io/port: "8080"
         prometheus.io/path: /metrics
     spec:
       # Kubernetes would otherwise inject REDIS_PORT=tcp://<ip>:6379 for the
       # "redis" Service, which clashes with the app's own REDIS_PORT setting.
       enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      # Always split across zones, so losing a zone keeps the page up.
+      # nodeTaintsPolicy Honor: a failed (tainted) node's zone is left out of
+      # the count, so replacements may start in the surviving zone at once.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          nodeTaintsPolicy: Honor
+          labelSelector:
+            matchLabels: { app: vote }
+      # Move off a failed node after 30 s instead of the default 5 minutes.
+      tolerations:
+        - { key: node.kubernetes.io/not-ready, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
+        - { key: node.kubernetes.io/unreachable, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
       containers:
         - name: vote
           image: nephele/vote
@@ -30,19 +47,35 @@ spec:
           envFrom:
             - configMapRef: { name: nephele-config }
           ports:
-            - containerPort: 80
+            - containerPort: 8080
               name: http
+          # Startup: up to 60 s to boot before the other probes begin.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
           readinessProbe:
             httpGet: { path: /readyz, port: http }
-            initialDelaySeconds: 3
             periodSeconds: 5
+            timeoutSeconds: 3
           livenessProbe:
             httpGet: { path: /healthz, port: http }
-            initialDelaySeconds: 10
             periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests: { cpu: 50m, memory: 64Mi }
             limits: { cpu: 300m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

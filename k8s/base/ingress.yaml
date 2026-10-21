@@ -4,6 +4,14 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: nephele
+  annotations:
+    # If a pod dies (or its node does) before Kubernetes removes it from the
+    # Service, retry the request on another pod instead of failing the user.
+    # Retrying a POST is safe here: a vote is an upsert keyed by voter ID.
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "1"
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "error timeout http_502 http_503 http_504 non_idempotent"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-tries: "3"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-timeout: "4"
 spec:
   ingressClassName: nginx
   rules:

@@ -1,4 +1,6 @@
 # Nightly database backup at 02:00. Keeps the 7 newest dumps on a volume.
+# scripts/chaos-test.sh also restores the newest dump into a scratch database
+# and compares the row count, because a backup nobody has restored is only a hope.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -26,6 +28,12 @@ spec:
           labels: { app: db-backup, db-client: "true" }
         spec:
           restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            fsGroup: 70
+            seccompProfile: { type: RuntimeDefault }
           containers:
             - name: backup
               image: postgres:15-alpine
@@ -46,6 +54,10 @@ spec:
               resources:
                 requests: { cpu: 25m, memory: 32Mi }
                 limits: { cpu: 250m, memory: 128Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
               volumeMounts:
                 - name: backups
                   mountPath: /backups
