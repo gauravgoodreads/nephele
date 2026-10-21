@@ -36,6 +36,22 @@ its own processing list, saves it with an upsert, and only then removes it, so
 a crash at any point loses nothing and a retry is harmless
 ([ADR 0003](docs/adr/0003-reliable-queue-at-least-once.md)).
 
+## Screenshots
+
+Taken on the 3-node kind cluster, 21 Oct 2026 ([all of them](docs/screenshots/)).
+
+| | |
+| --- | --- |
+| ![Vote page](docs/screenshots/04-vote-page.jpg) | ![Results page](docs/screenshots/05-results-page.jpg) |
+| ![Grafana application dashboard](docs/screenshots/01-grafana-application.jpg) | ![Grafana platform dashboard](docs/screenshots/02-grafana-platform.jpg) |
+
+**Alert drill.** Workers paused and 1,000 votes queued: `VoteQueueBacklog`
+and `WorkerStalled` fire after a minute. Workers resumed: KEDA scales them to
+10, the queue empties and both alerts clear on their own.
+
+![Prometheus alerts firing](docs/screenshots/06-prometheus-alerts-firing.jpg)
+![Grafana during the load test and the drill](docs/screenshots/07-grafana-alert-drill.jpg)
+
 ## Run it
 
 ### Kubernetes on your laptop (recommended)
