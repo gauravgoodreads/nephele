@@ -32,9 +32,11 @@ FROM base AS final
 # Copy our code from the current folder to the working directory inside the container
 COPY . .
 
-# Make port 80 available for links and/or publish
-EXPOSE 80
-
-# Nephele: worker count comes from GUNICORN_WORKERS so Kubernetes can size each pod
-ENV GUNICORN_WORKERS=2
-CMD gunicorn app:app -b 0.0.0.0:80 --log-file - --access-logfile - --workers ${GUNICORN_WORKERS} --keep-alive 0
+# Nephele: run as an unprivileged user on an unprivileged port, write nothing
+# to the image (bytecode off, Gunicorn's heartbeat files in /tmp), and size the
+# number of Gunicorn workers per pod from GUNICORN_WORKERS.
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PORT=8080 GUNICORN_WORKERS=2
+USER 10001
+EXPOSE 8080
+CMD gunicorn app:app -b 0.0.0.0:${PORT} --worker-tmp-dir /tmp --log-file - --access-logfile - --workers ${GUNICORN_WORKERS} --threads 4 --keep-alive 0

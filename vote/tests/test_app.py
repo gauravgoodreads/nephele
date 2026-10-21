@@ -50,3 +50,12 @@ def test_metrics_report_votes_and_queue_depth(client):
     assert 'nephele_votes_received{option="a"} 2.0' in text
     assert 'nephele_votes_received{option="b"} 1.0' in text
     assert "nephele_queue_depth 3.0" in text
+
+
+def test_metrics_report_worker_progress(client):
+    client.redis.set("nephele:votes_saved", 41)
+    client.redis.rpush("votes:processing:worker-1", "x", "y")
+    client.redis.rpush("votes:processing:worker-2", "z")
+    text = client.get("/metrics").get_data(as_text=True)
+    assert "nephele_votes_saved 41.0" in text
+    assert "nephele_votes_in_flight 3.0" in text

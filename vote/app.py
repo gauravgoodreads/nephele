@@ -23,7 +23,10 @@ app.logger.setLevel(logging.INFO)
 
 def get_redis():
     if not hasattr(g, 'redis'):
-        g.redis = Redis(host=redis_host, port=redis_port, password=redis_password, db=0, socket_timeout=5)
+        # Short timeouts: a slow or restarting Redis must fail a request quickly,
+        # not tie up a web worker (and with it the health checks) for seconds.
+        g.redis = Redis(host=redis_host, port=redis_port, password=redis_password, db=0,
+                        socket_timeout=2, socket_connect_timeout=1)
     return g.redis
 
 @app.route("/", methods=['POST','GET'])
@@ -80,10 +83,16 @@ def metrics():
                      ['option'], registry=registry)
     depth = Gauge('nephele_queue_depth', 'Votes waiting on the Redis queue for the worker',
                   registry=registry)
+    in_flight = Gauge('nephele_votes_in_flight', 'Votes taken by a worker but not yet saved',
+                      registry=registry)
+    saved = Gauge('nephele_votes_saved', 'Votes saved to PostgreSQL by the workers',
+                  registry=registry)
     redis = get_redis()
     for option in ('a', 'b'):
         received.labels(option).set(int(redis.get('nephele:votes_received:' + option) or 0))
     depth.set(redis.llen('votes'))
+    in_flight.set(sum(redis.llen(key) for key in redis.scan_iter('votes:processing:*', count=100)))
+    saved.set(int(redis.get('nephele:votes_saved') or 0))
     return Response(generate_latest(registry), mimetype=CONTENT_TYPE_LATEST)
 
 

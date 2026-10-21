@@ -32,12 +32,12 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
       interval: 10s
       timeout: 3s
       retries: 3
     ports:
-      - "8080:80"
+      - "8080:8080"
     restart: unless-stopped
     networks: [front-tier, back-tier]
 
@@ -50,12 +50,12 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost/readyz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/readyz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 10s
       timeout: 3s
       retries: 3
     ports:
-      - "8081:80"
+      - "8081:8080"
     restart: unless-stopped
     networks: [front-tier, back-tier]
 
@@ -75,6 +75,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -121,6 +124,7 @@ services:
 
 volumes:
   db-data:
+  redis-data:
 
 networks:
   front-tier:

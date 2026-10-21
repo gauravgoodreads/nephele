@@ -6,7 +6,7 @@ scrape_configs:
   - job_name: vote
     metrics_path: /metrics
     static_configs:
-      - targets: ["vote:80"]
+      - targets: ["vote:8080"]
 
   - job_name: prometheus
     static_configs:
